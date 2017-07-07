@@ -158,9 +158,9 @@
           "config" : {
             "packages" : {
               "yum" : {
-                "wget":[],
+                "nginx":[],
                 "curl":[],
-                "nginx":[]
+                "wget":[]
               }
             }
           }
@@ -177,16 +177,17 @@
 
           "yum update -y aws-cfn-bootstrap\n",
 
-          "yum install -y java-1.8.0\n",
+          "yum install -y java-1.8.0>> /tmp/yum-java8.log 2>&1\n",
 
           "alternatives --set java /usr/lib/jvm/jre-1.8.0-openjdk.x86_64/bin/java\n",
 
-          "yum -y remove java-1.7.0-openjdk\n",
+          "yum -y remove java-1.7.0-openjdk>> /tmp/yum-java7.log 2>&1\n",
 
           "##Install Artifactory\n",
           "wget https://bintray.com/jfrog/artifactory-pro-rpms/rpm -O bintray-jfrog-artifactory-pro-rpms.repo\n",
           "mv bintray-jfrog-artifactory-pro-rpms.repo /etc/yum.repos.d/\n",
-          "yum install -y jfrog-artifactory-pro\n",
+
+          "yum install -y jfrog-artifactory-pro>> /tmp/yum-artifactory.log 2>&1\n",
 
           "service artifactory start"
         ]]}}
