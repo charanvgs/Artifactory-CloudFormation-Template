@@ -13,6 +13,35 @@
       "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
       "Type": "AWS::EC2::KeyPair::KeyName",
       "ConstraintDescription" : "must be the name of an existing EC2 KeyPair."
+    },
+    "DBName": {
+      "Default": "MyDatabase",
+      "Description" : "The database name",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBUser": {
+      "NoEcho": "true",
+      "Description" : "The database admin account username",
+      "Type": "String",
+      "MinLength": "1",
+      "MaxLength": "16",
+      "AllowedPattern" : "[a-zA-Z][a-zA-Z0-9]*",
+      "ConstraintDescription" : "must begin with a letter and contain only alphanumeric characters."
+    },
+
+    "DBPassword": {
+      "NoEcho": "true",
+      "Description" : "The database admin account password",
+      "Type": "String",
+      "MinLength": "8",
+      "MaxLength": "41",
+      "AllowedPattern" : "[a-zA-Z0-9]*",
+      "ConstraintDescription" : "must contain only alphanumeric characters."
     }
   },
 
@@ -151,16 +180,93 @@
 
 
   "Resources": {
+    "MyDB" : {
+      "Type" : "AWS::RDS::DBInstance",
+      "Properties" : {
+        "DBName" : { "Ref" : "DBName" },
+        "AllocatedStorage" : "5",
+        "DBInstanceClass" : "db.t2.small",
+        "Engine" : "MySQL",
+        "EngineVersion" : "5.6.19",
+        "MasterUsername" : { "Ref" : "DBUser" },
+        "MasterUserPassword" : { "Ref" : "DBPassword" },
+        "DBParameterGroupName" : { "Ref" : "MyRDSParamGroup" }
+      }
+    },
+
+    "MyRDSParamGroup" : {
+      "Type": "AWS::RDS::DBParameterGroup",
+      "Properties" : {
+        "Family" : "MySQL5.6",
+        "Description" : "CloudFormation Sample Database Parameter Group",
+        "Parameters" : {
+          "autocommit" : "1" ,
+          "general_log" : "1",
+          "old_passwords" : "0"
+        }
+      }
+    },
     "WebServer": {
       "Type": "AWS::EC2::Instance",
       "Metadata" : {
         "AWS::CloudFormation::Init" : {
-          "config" : {
+          "configSets" : {
+            "InstallAndRun" : [ "Install" ]
+          },
+          "Install" : {
             "packages" : {
               "yum" : {
                 "nginx":[],
-                "curl":[],
-                "wget":[]
+                "wget":[],
+                "curl":[]
+              }
+            },
+
+            "files" : {
+              "/etc/nginx/conf.d/default.conf" : {
+                "content" : { "Fn::Join" : ["", [
+                  "#ssl_certificate      /etc/nginx/ssl/example.pem;\n",
+                  "#ssl_certificate_key  /etc/nginx/ssl/example.key;\n",
+                  "#ssl_session_cache shared:SSL:1m;\n",
+                  "#ssl_prefer_server_ciphers   on;\n",
+                  "## server configuration\n",
+                  "server {\n",
+                  "  #listen 443 ssl;\n",
+                  "  listen 80 ;\n",
+                  "  server_name ~(?<repo>.+)\\.artifactory artifactory;\n",
+
+                  "  if ($http_x_forwarded_proto = '') {\n",
+                  "    set $http_x_forwarded_proto  $scheme;\n",
+                  "  }\n",
+                  "  ## Application specific logs\n",
+                  "  ## access_log /var/log/nginx/artifactory-access.log timing;\n",
+                  "  ## error_log /var/log/nginx/artifactory-error.log;\n",
+                  "  rewrite ^/$ /artifactory/webapp/ redirect;\n",
+                  "  rewrite ^/artifactory/?(/webapp)?$ /artifactory/webapp/ redirect;\n",
+                  "  rewrite ^/(v1|v2)/(.*) /artifactory/api/docker/$repo/$1/$2;\n",
+                  "  chunked_transfer_encoding on;\n",
+                  "  client_max_body_size 0;\n",
+                  "  location /artifactory/ {\n",
+                  "    proxy_read_timeout  900;\n",
+                  "    proxy_pass_header   Server;\n",
+                  "    proxy_cookie_path   ~*^/.* /;\n",
+                  "    proxy_pass          http://127.0.0.1:8081/artifactory/;\n",
+                  "    proxy_set_header    X-Artifactory-Override-Base-Url $http_x_forwarded_proto://$host:$server_port/artifactory;\n",
+                  "    proxy_set_header    X-Forwarded-Port  $server_port;\n",
+                  "    proxy_set_header    X-Forwarded-Proto $http_x_forwarded_proto;\n",
+                  "    proxy_set_header    Host              $http_host;\n",
+                  "    proxy_set_header    X-Forwarded-For   $proxy_add_x_forwarded_for;\n",
+                  "  }\n",
+                  "}\n"
+                ]]},
+                "mode"   : "000755",
+                "owner"  : "root",
+                "group"  : "root"
+              }
+            },
+            "services" : {
+              "sysvinit" : {
+                "nginx"    : { "enabled" : "true", "ensureRunning" : "true", "files": ["/etc/nginx/conf.d/default.conf"] }
               }
             }
           }
@@ -188,8 +294,12 @@
           "mv bintray-jfrog-artifactory-pro-rpms.repo /etc/yum.repos.d/\n",
 
           "yum install -y jfrog-artifactory-pro>> /tmp/yum-artifactory.log 2>&1\n",
+          "##yum install -y nginx>> /tmp/yum-nginx.log 2>&1\n",
 
-          "service artifactory start"
+          "service artifactory start\n",
+
+          "## Nginx setup\n",
+          "service nginx restart\n"
         ]]}}
       }
     },
@@ -208,8 +318,17 @@
   },
   "Outputs" : {
     "ArtifactoryURL" : {
-      "Description" : "URL for newly created LAMP stack",
+      "Description" : "URL for newly created Artifactory stack",
       "Value" : { "Fn::Join" : ["", ["http://", { "Fn::GetAtt" : [ "WebServer", "PublicDnsName" ]}, ":8081/artifactory"]] }
+    },
+    "JDBCConnectionString": {
+      "Description" : "JDBC connection string for the database",
+      "Value" : { "Fn::Join": [ "", [ "jdbc:mysql://",
+        { "Fn::GetAtt": [ "MyDB", "Endpoint.Address" ] },
+        ":",
+        { "Fn::GetAtt": [ "MyDB", "Endpoint.Port" ] },
+        "/",
+        { "Ref": "DBName" }]]}
     }
   }
 }
